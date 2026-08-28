@@ -13,6 +13,95 @@ The full product brief and the reasoning behind every scope decision lives in
 the approved plan at `C:\Users\green\.claude\plans\peaceful-wibbling-octopus.md`
 — read that for the "why", this file is just "where things stand."
 
+## Handover — 2026-08-25, first real-device feedback (read this first)
+
+**The journey so far:** Paul uploaded 4 photos of handwritten workout notes,
+which got transcribed into [workouts.md](../../workouts.md) in the parent
+Claude working directory. That became the seed data for Step Up, an app idea
+he then talked through in detail (routine/alarm-driven, voice logging, no
+per-set commentary, weight tracking, Garmin, Brisbane weather, podcasts
+playing alongside). A full plan was written and approved
+(`C:\Users\green\.claude\plans\peaceful-wibbling-octopus.md`), then built
+end-to-end in one session: scaffold+schema+seed → voice in/out + guided
+workout loop → rule-based plan generator → weather+body-metrics → real push
+notifications (VAPID keys + shared secret live in **Supabase Vault**, not an
+env var, because no MCP tool here can set Edge Function secrets — see
+`get_app_secret()` in `supabase/schema.sql`). Deployed to GitHub Pages;
+had to make the repo **public** because GitHub Pages requires GitHub Pro for
+private repos on Paul's plan — acceptable here since no secrets live in git.
+Live at `https://easybeinggreen.github.io/step-up/`.
+
+**Then Paul tried it for real on his Android phone and gave this feedback —
+none of it has been acted on yet, this is the incoming punch list:**
+
+1. **Left/Right got silently collapsed during seeding — needs breaking back
+   out.** The exercise seed migration merged directional pairs from the
+   handwritten notes (e.g. "Crunch x5 L" / "Crunch x5 R") into one row with
+   "alternate L/R" in the description. Paul wants sides tracked/shown as
+   distinct, not merged. This needs a decision before re-seeding: separate
+   `exercises` rows per side, or one row with `reps_left`/`reps_right`
+   columns on `session_sets`? The latter is probably cleaner (avoids
+   doubling the exercise count) but changes the schema and every screen that
+   logs a set.
+
+2. **Pacing is wrong across the board, and reps aren't all the same shape.**
+   The seeded `default_seconds_per_rep` values are too fast generally, and
+   more importantly some exercises aren't a flat count at all — they have an
+   explicit hold phase (Paul's example: "hold for 2 seconds"). The current
+   model (`countReps`/`countHold` in `src/voice.js`) only supports one flat
+   per-count interval; it has no concept of an up/hold/down phase within a
+   single rep. This needs a richer tempo model before the counting actually
+   matches how these exercises are meant to be done.
+
+3. **Live "faster"/"slower" voice control — reprioritize this.** This was
+   explicitly deferred to Phase 2 during planning as a "nice to have," on
+   the assumption fixed per-exercise pacing would be good enough to start.
+   Real use showed otherwise — Paul wants to say "slower" mid-exercise and
+   have it take effect immediately. `parseCommand()` in `src/voice.js`
+   already has the regex structure to extend; the harder part is that
+   `countReps`/`countHold` currently run as a single uninterruptible async
+   loop with no way to adjust pace mid-flight, and there's no concurrent
+   listening while counting (see #6).
+
+4. **Biggest flaw: audio stops ~5 seconds after the screen goes off/locks.**
+   Podcast/audiobook apps (Paul uses AntennaPod) keep playing fine with the
+   screen off; Step Up's guided workout does not. This is almost certainly
+   because there's no Screen Wake Lock (`navigator.wakeLock`) implemented
+   anywhere, and possibly also because there's no proper background audio
+   session (no Media Session API usage) to tell the OS "this tab is doing
+   something audio-important, don't suspend it." This was flagged during
+   planning as a known PWA limitation ("the phone stays visible/awake during
+   the workout" was the agreed tradeoff), but Paul hadn't actually hit the
+   concrete failure mode until testing on-device — worth revisiting whether
+   a wake lock alone fixes it, or whether it needs more.
+
+5. **Voice UX is unclear — when do you talk, and what can you say?**
+   Currently: tap the mic button once, it listens for exactly one utterance
+   (`listenOnce()` in `src/voice.js`), no visual "I'm listening now"
+   feedback beyond a text status line, and the full command grammar is
+   never shown anywhere (Home/Session screens each show a short one-line
+   hint, not the full list). Needs: a clearer listening-state indicator
+   (not just text), and a discoverable reference of every recognized
+   phrase — maybe in Settings, maybe inline.
+
+6. **Proposed idea worth taking seriously: a per-exercise setup/calibration
+   walkthrough.** Instead of guessing `default_seconds_per_rep` at seed time,
+   Paul suggested going through each exercise once as a setup step to
+   determine and lock in the right pace interactively. This is the same
+   idea as the "tempo calibration" control already named (but not built) in
+   `src/screens/settings.js` — Paul is now saying it should happen *before*
+   general use, not as an optional later tweak. Worth designing as a proper
+   first-run/setup flow rather than a buried settings control.
+
+**Suggested priority order for whoever picks this up next** (not decided
+with Paul yet, just a reasonable read of "biggest flaw" language used):
+wake lock (#4, likely the smallest fix for the largest impact) → voice UX
+clarity (#5, mostly UI, no schema changes) → tempo/hold model + calibration
+setup flow (#2 + #6, these are really one piece of work) → live
+faster/slower (#3, depends on the tempo model from the previous step) →
+L/R breakdown (#1, a real schema/data decision, deserves its own
+conversation with Paul about the tradeoff rather than a unilateral pick).
+
 ## Stack
 
 - Vite + vanilla JS + `vite-plugin-pwa` (injectManifest strategy — a
